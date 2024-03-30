@@ -204,20 +204,21 @@ void EleroCover::control(const cover::CoverCall &call) {
 void EleroCover::start_movement(CoverOperation dir) {
   switch(dir) {
     case COVER_OPERATION_OPENING:
-      ESP_LOGD(TAG, "Sending OPEN command");
+      ESP_LOGD(TAG, "Sending OPEN command 0x%02x", this->command_up_);
       this->commands_to_send_.push(this->command_up_);
       // Reset tilt state on movement
       this->tilt = 0.0;
       this->last_operation_ = COVER_OPERATION_OPENING;
     break;
     case COVER_OPERATION_CLOSING:
-      ESP_LOGD(TAG, "Sending CLOSE command");
+      ESP_LOGD(TAG, "Sending CLOSE command 0x%02x", this->command_down_);
       this->commands_to_send_.push(this->command_down_);
       // Reset tilt state on movement
       this->tilt = 0.0;
       this->last_operation_ = COVER_OPERATION_CLOSING;
     break;
     case COVER_OPERATION_IDLE:
+      ESP_LOGD(TAG, "Sending STOP command 0x%02x", this->command_stop_);
       this->commands_to_send_.push(this->command_stop_);
     break;
   }
