@@ -442,7 +442,6 @@ void Elero::register_cover(EleroCover *cover) {
 }
 
 bool Elero::send_command(t_elero_command *cmd) {
-  ESP_LOGD(TAG, "send_command called");
   uint16_t code = (0x00 - (cmd->counter * 0x708f)) & 0xffff;
   this->msg_tx_[0] = 0x1d; // message length
   this->msg_tx_[1] = cmd->counter; // message counter
@@ -465,11 +464,12 @@ bool Elero::send_command(t_elero_command *cmd) {
   this->msg_tx_[18] = ((cmd->blind_addr >> 8) & 0xff);
   this->msg_tx_[19] = ((cmd->blind_addr) & 0xff);
   for(int i=0; i<10; i++){
-    ESP_LOGD(TAG, "payload[%d] = 0x%02x", i, cmd->payload[i]);
     this->msg_tx_[20 + i] = cmd->payload[i];
   }
   this->msg_tx_[22] = ((code >> 8) & 0xff);
   this->msg_tx_[23] = (code & 0xff);
+
+  ESP_LOGD(TAG, "SENDING: len=%02d, cnt=%02d, typ=0x%02x, typ2=0x%02x, hop=%02x, syst=%02x, chl=%02d, src=0x%02x%02x%02x, bwd=0x%02x%02x%02x, fwd=0x%02x%02x%02x, #dst=%02d, dst=0x%02x%02x%02x, payload=[0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x]", msg_tx_[0], msg_tx_[1], msg_tx_[2], msg_tx_[3], msg_tx_[4], msg_tx_[5], msg_tx_[6], msg_tx_[7], msg_tx_[8], msg_tx_[9], msg_tx_[10], msg_tx_[11], msg_tx_[12], msg_tx_[13], msg_tx_[14], msg_tx_[15], msg_tx_[16], msg_tx_[17], msg_tx_[18], msg_tx_[19], msg_tx_[20], msg_tx_[21], msg_tx_[22], msg_tx_[23], msg_tx_[24], msg_tx_[25], msg_tx_[26], msg_tx_[27], msg_tx_[28], msg_tx_[29]);
 
   uint8_t *payload = &this->msg_tx_[22];
   msg_encode(payload);
