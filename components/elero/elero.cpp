@@ -66,7 +66,7 @@ void Elero::flush_and_rx() {
 void Elero::reset() {
   // We don't do a hardware reset as we can't read
   // the MISO pin directly. Rely on software-reset only.
-  
+
   this->enable();
   this->write_byte(CC1101_SRES);
   delay_microseconds_safe(50);
@@ -174,7 +174,7 @@ bool Elero::wait_tx() {
 bool Elero::wait_tx_done() {
   //ESP_LOGD(TAG, "wait_tx_done");
   uint8_t timeout = 200;
-  
+
   //while (((this->read_status(CC1101_TXBYTES) & 0x7f) != 0) && (--timeout != 0)) {
   while((!this->received_) && (--timeout != 0)) {
     delay_microseconds_safe(200);
@@ -442,7 +442,7 @@ void Elero::register_cover(EleroCover *cover) {
 }
 
 bool Elero::send_command(t_elero_command *cmd) {
-  //ESP_LOGD(TAG, "send_command called");
+  ESP_LOGD(TAG, "send_command called");
   uint16_t code = (0x00 - (cmd->counter * 0x708f)) & 0xffff;
   this->msg_tx_[0] = 0x1d; // message length
   this->msg_tx_[1] = cmd->counter; // message counter
@@ -464,8 +464,10 @@ bool Elero::send_command(t_elero_command *cmd) {
   this->msg_tx_[17] = ((cmd->blind_addr >> 16) & 0xff); // blind address
   this->msg_tx_[18] = ((cmd->blind_addr >> 8) & 0xff);
   this->msg_tx_[19] = ((cmd->blind_addr) & 0xff);
-  for(int i=0; i<10; i++)
+  for(int i=0; i<10; i++){
+    ESP_LOGD(TAG, "payload[%d] = 0x%02x", i, cmd->payload[i]);
     this->msg_tx_[20 + i] = cmd->payload[i];
+  }
   this->msg_tx_[22] = ((code >> 8) & 0xff);
   this->msg_tx_[23] = (code & 0xff);
 
