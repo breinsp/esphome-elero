@@ -43,6 +43,7 @@ void EleroCover::loop() {
     if(this->is_at_target()) {
       this->commands_to_send_.push(this->command_stop_);
       this->current_operation = COVER_OPERATION_IDLE;
+      this->target_position_ = COVER_OPEN;
     }
 
     // Publish position every second
@@ -83,8 +84,10 @@ void EleroCover::handle_commands(uint32_t now) {
           this->increase_counter();
         }
       } else {
+        ESP_LOGD(TAG, "Retry #%d for blind 0x%02x", this->send_retries_, this->command_.blind_addr);
         this->send_retries_++;
         if(this->send_retries_ > ELERO_SEND_RETRIES) {
+          ESP_LOGE(TAG, "Hit maximum number of retries, giving up.");
           this->send_retries_ = 0;
           this->commands_to_send_.pop();
         }
@@ -110,7 +113,7 @@ cover::CoverTraits EleroCover::get_traits() {
 }
 
 void EleroCover::set_rx_state(uint8_t state) {
-  ESP_LOGD(TAG, "Got state: 0x%02x for blind 0x%02x", state, this->command_.blind_addr);
+  ESP_LOGV(TAG, "Got state: 0x%02x for blind 0x%02x", state, this->command_.blind_addr);
   float pos = this->position;
   float current_tilt = this->tilt;
   CoverOperation op = this->current_operation;
@@ -201,24 +204,26 @@ void EleroCover::control(const cover::CoverCall &call) {
   }
 }
 
+// FIXME: Most of this should probably be moved to the
+// handle_commands function to only publish a new state
+// if at least the transmission was successful
 void EleroCover::start_movement(CoverOperation dir) {
   switch(dir) {
     case COVER_OPERATION_OPENING:
-      ESP_LOGD(TAG, "Sending OPEN command 0x%02x", this->command_up_);
+      ESP_LOGV(TAG, "Sending OPEN command");
       this->commands_to_send_.push(this->command_up_);
       // Reset tilt state on movement
       this->tilt = 0.0;
       this->last_operation_ = COVER_OPERATION_OPENING;
     break;
     case COVER_OPERATION_CLOSING:
-      ESP_LOGD(TAG, "Sending CLOSE command 0x%02x", this->command_down_);
+      ESP_LOGV(TAG, "Sending CLOSE command");
       this->commands_to_send_.push(this->command_down_);
       // Reset tilt state on movement
       this->tilt = 0.0;
       this->last_operation_ = COVER_OPERATION_CLOSING;
     break;
     case COVER_OPERATION_IDLE:
-      ESP_LOGD(TAG, "Sending STOP command 0x%02x", this->command_stop_);
       this->commands_to_send_.push(this->command_stop_);
     break;
   }

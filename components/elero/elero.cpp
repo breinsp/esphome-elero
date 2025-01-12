@@ -12,23 +12,25 @@ static const uint8_t flash_table_decode[] = {0x0a, 0x03, 0x01, 0x0c, 0x0d, 0x07,
 
 void Elero::loop() {
   if(this->received_) {
-    //ESP_LOGD(TAG, "loop says \"received\"");
+    ESP_LOGVV(TAG, "loop says \"received\"");
     this->received_ = false;
     uint8_t len = this->read_status(CC1101_RXBYTES);
-    if(len & 0x7F && !(len & 0x80)) { // No overflow and bytes available
-      if(len > 64) {
-        ESP_LOGD(TAG, "Received more bytes than FIFO length - wtf?");
+    if(len & 0x7F) { // bytes available
+      if((len & 0x7F) > CC1101_FIFO_LENGTH) {
+        ESP_LOGV(TAG, "Received more bytes than FIFO length - wtf?");
+        this->read_buf(CC1101_RXFIFO, this->msg_rx_, CC1101_FIFO_LENGTH);
       } else {
-        this->read_buf(CC1101_RXFIFO, this->msg_rx_, len);
-        //std::string data = format_hex(this->msg_rx_, len);
-        //ESP_LOGD(TAG, "Received: 0x%s", data.c_str());
-        // Sanity check
-        if(this->msg_rx_[0] + 3 == len) {
-          this->interprete_msg();
-        }
+        this->read_buf(CC1101_RXFIFO, this->msg_rx_, (len & 0x7f));
+      }
+      // Sanity check
+      if(this->msg_rx_[0] + 3 <= (len & 0x7f)) {
+        this->interpret_msg();
       }
     }
-    this->flush_and_rx();
+    if(len & 0x80) { // overflow
+      ESP_LOGV(TAG, "Rx overflow, flushing FIFOs");
+      this->flush_and_rx();
+    }
   }
 }
 
@@ -55,8 +57,9 @@ void Elero::setup() {
 }
 
 void Elero::flush_and_rx() {
-  //ESP_LOGD(TAG, "flush_and_rx");
+  ESP_LOGVV(TAG, "flush_and_rx");
   this->write_cmd(CC1101_SIDLE);
+  this->wait_idle();
   this->write_cmd(CC1101_SFRX);
   this->write_cmd(CC1101_SFTX);
   this->write_cmd(CC1101_SRX);
@@ -66,7 +69,7 @@ void Elero::flush_and_rx() {
 void Elero::reset() {
   // We don't do a hardware reset as we can't read
   // the MISO pin directly. Rely on software-reset only.
-
+  
   this->enable();
   this->write_byte(CC1101_SRES);
   delay_microseconds_safe(50);
@@ -145,7 +148,7 @@ void Elero::write_cmd(uint8_t cmd) {
 }
 
 bool Elero::wait_rx() {
-  //ESP_LOGD(TAG, "wait_rx");
+  ESP_LOGVV(TAG, "wait_rx");
   uint8_t timeout = 200;
   while ((this->read_status(CC1101_MARCSTATE) != CC1101_MARCSTATE_RX) && (--timeout != 0)) {
     delay_microseconds_safe(200);
@@ -153,28 +156,41 @@ bool Elero::wait_rx() {
   
   if(timeout > 0)
     return true;
-  ESP_LOGD(TAG, "Timed out waiting for RX");
+  ESP_LOGE(TAG, "Timed out waiting for RX: 0x%02x", this->read_status(CC1101_MARCSTATE));
+  return false;
+}
+
+bool Elero::wait_idle() {
+  ESP_LOGVV(TAG, "wait_idle");
+  uint8_t timeout = 200;
+  while ((this->read_status(CC1101_MARCSTATE) != CC1101_MARCSTATE_IDLE) && (--timeout != 0)) {
+    delay_microseconds_safe(200);
+  }
+  
+  if(timeout > 0)
+    return true;
+  ESP_LOGE(TAG, "Timed out waiting for Idle: 0x%02x", this->read_status(CC1101_MARCSTATE));
   return false;
 }
 
 bool Elero::wait_tx() {
-  //ESP_LOGD(TAG, "wait_tx");
+  ESP_LOGVV(TAG, "wait_tx");
   uint8_t timeout = 200;
-  uint8_t status = this->read_status(CC1101_MARCSTATE);
+
   while ((this->read_status(CC1101_MARCSTATE) != CC1101_MARCSTATE_TX) && (--timeout != 0)) {
     delay_microseconds_safe(200);
   }
 
   if(timeout > 0)
     return true;
-  ESP_LOGD(TAG, "Timed out waiting for TX");
+  ESP_LOGE(TAG, "Timed out waiting for TX: 0x%02x", this->read_status(CC1101_MARCSTATE));
   return false;
 }
 
 bool Elero::wait_tx_done() {
-  //ESP_LOGD(TAG, "wait_tx_done");
+  ESP_LOGVV(TAG, "wait_tx_done");
   uint8_t timeout = 200;
-
+  
   //while (((this->read_status(CC1101_TXBYTES) & 0x7f) != 0) && (--timeout != 0)) {
   while((!this->received_) && (--timeout != 0)) {
     delay_microseconds_safe(200);
@@ -182,15 +198,15 @@ bool Elero::wait_tx_done() {
 
   if(timeout > 0)
     return true;
-  ESP_LOGD(TAG, "Timed out waiting for TX Done");
+  ESP_LOGE(TAG, "Timed out waiting for TX Done: 0x%02x", this->read_status(CC1101_MARCSTATE));
   return false;
 }
 
 bool Elero::transmit() {
-  //ESP_LOGD(TAG, "transmit called for %d data bytes", this->msg_tx_[0]);
-  this->flush_and_rx();
+  ESP_LOGVV(TAG, "transmit called for %d data bytes", this->msg_tx_[0]);
+  //this->flush_and_rx();
+  this->write_cmd(CC1101_SRX);
   if(!this->wait_rx()) {
-    //ESP_LOGD(TAG, "Error waiting for Rx");
     return false;
   }
 
@@ -207,12 +223,12 @@ bool Elero::transmit() {
   }
 
   uint8_t bytes = this->read_status(CC1101_TXBYTES) & 0x7f;
-  this->flush_and_rx();
   if(bytes != 0) {
-    ESP_LOGD(TAG, "Error transferring, %d bytes left in buffer", bytes);
+    ESP_LOGE(TAG, "Error transferring, %d bytes left in buffer", bytes);
+    this->flush_and_rx();
     return false;
   } else {
-    //ESP_LOGD(TAG, "Transmission successful");
+    ESP_LOGV(TAG, "Transmission successful");
     return true;
   }
 }
@@ -387,8 +403,14 @@ void Elero::msg_encode(uint8_t* msg) {
   encode_nibbles(msg);
 }
 
-void Elero::interprete_msg() {
+void Elero::interpret_msg() {
   uint8_t length = this->msg_rx_[0];
+  // Sanity check
+  if(length > ELERO_MAX_PACKET_SIZE) {
+    ESP_LOGE(TAG, "Received invalid packet: too long (%d)", length);
+    return;
+  }
+
   uint8_t cnt = this->msg_rx_[1];
   uint8_t typ = this->msg_rx_[2];
   uint8_t typ2 = this->msg_rx_[3];
@@ -408,6 +430,13 @@ void Elero::interprete_msg() {
     dests_len = this->msg_rx_[16];
     dst = this->msg_rx_[17];
   }
+
+  // Sanity check
+  if(dests_len + 15 > CC1101_FIFO_LENGTH) {
+    ESP_LOGE(TAG, "Received invalid packet: dests_len too long (%d)", dests_len);
+    return;
+  }
+
   uint8_t payload1 = this->msg_rx_[17 + dests_len];
   uint8_t payload2 = this->msg_rx_[18 + dests_len];
   uint8_t crc = this->msg_rx_[length + 2] >> 7;
@@ -419,9 +448,7 @@ void Elero::interprete_msg() {
     rssi = (float)((this->msg_rx_[length+1])/2-74);
   uint8_t *payload = &this->msg_rx_[19 + dests_len];
   msg_decode(payload);
-  if(length == 29){
-	ESP_LOGD(TAG, "len=%02d, cnt=%02d, typ=0x%02x, typ2=0x%02x, hop=%02x, syst=%02x, chl=%02d, src=0x%06x, bwd=0x%06x, fwd=0x%06x, #dst=%02d, dst=%06x, rssi=%2.1f, lqi=%2d, crc=%2d, payload=[0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x]", length, cnt, typ, typ2, hop, syst, chl, src, bwd, fwd, num_dests, dst, rssi, lqi, crc, payload1, payload2, payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6], payload[7]);
-  }
+  ESP_LOGD(TAG, "rcv'd: len=%02d, cnt=%02d, typ=0x%02x, typ2=0x%02x, hop=%02x, syst=%02x, chl=%02d, src=0x%06x, bwd=0x%06x, fwd=0x%06x, #dst=%02d, dst=%06x, rssi=%2.1f, lqi=%2d, crc=%2d, payload=[0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x]", length, cnt, typ, typ2, hop, syst, chl, src, bwd, fwd, num_dests, dst, rssi, lqi, crc, payload1, payload2, payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6], payload[7]);
 
   if((typ == 0xca) || (typ == 0xc9)) { // Status message from a blind
     // Check if we know the blind
@@ -444,6 +471,7 @@ void Elero::register_cover(EleroCover *cover) {
 }
 
 bool Elero::send_command(t_elero_command *cmd) {
+  ESP_LOGVV(TAG, "send_command called");
   uint16_t code = (0x00 - (cmd->counter * 0x708f)) & 0xffff;
   this->msg_tx_[0] = 0x1d; // message length
   this->msg_tx_[1] = cmd->counter; // message counter
@@ -465,16 +493,15 @@ bool Elero::send_command(t_elero_command *cmd) {
   this->msg_tx_[17] = ((cmd->blind_addr >> 16) & 0xff); // blind address
   this->msg_tx_[18] = ((cmd->blind_addr >> 8) & 0xff);
   this->msg_tx_[19] = ((cmd->blind_addr) & 0xff);
-  for(int i=0; i<10; i++){
+  for(int i=0; i<10; i++)
     this->msg_tx_[20 + i] = cmd->payload[i];
-  }
   this->msg_tx_[22] = ((code >> 8) & 0xff);
   this->msg_tx_[23] = (code & 0xff);
 
-  ESP_LOGD(TAG, "SENDING: len=%02d, cnt=%02d, typ=0x%02x, typ2=0x%02x, hop=%02x, syst=%02x, chl=%02d, src=0x%02x%02x%02x, bwd=0x%02x%02x%02x, fwd=0x%02x%02x%02x, #dst=%02d, dst=0x%02x%02x%02x, payload=[0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x]", msg_tx_[0], msg_tx_[1], msg_tx_[2], msg_tx_[3], msg_tx_[4], msg_tx_[5], msg_tx_[6], msg_tx_[7], msg_tx_[8], msg_tx_[9], msg_tx_[10], msg_tx_[11], msg_tx_[12], msg_tx_[13], msg_tx_[14], msg_tx_[15], msg_tx_[16], msg_tx_[17], msg_tx_[18], msg_tx_[19], msg_tx_[20], msg_tx_[21], msg_tx_[22], msg_tx_[23], msg_tx_[24], msg_tx_[25], msg_tx_[26], msg_tx_[27], msg_tx_[28], msg_tx_[29]);
-
   uint8_t *payload = &this->msg_tx_[22];
   msg_encode(payload);
+
+  ESP_LOGV(TAG, "send: len=%02d, cnt=%02d, typ=0x%02x, typ2=0x%02x, hop=%02x, syst=%02x, chl=%02d, src=0x%02x%02x%02x, bwd=0x%02x%02x%02x, fwd=0x%02x%02x%02x, #dst=%02d, dst=0x%02x%02x%02x, payload=[0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x]", this->msg_tx_[0], this->msg_tx_[1], this->msg_tx_[2], this->msg_tx_[3], this->msg_tx_[4], this->msg_tx_[5], this->msg_tx_[6], this->msg_tx_[7], this->msg_tx_[8], this->msg_tx_[9], this->msg_tx_[10], this->msg_tx_[11], this->msg_tx_[12], this->msg_tx_[13], this->msg_tx_[14], this->msg_tx_[15], this->msg_tx_[16], this->msg_tx_[17], this->msg_tx_[18], this->msg_tx_[19], this->msg_tx_[20], this->msg_tx_[21], this->msg_tx_[22], this->msg_tx_[23], this->msg_tx_[24], this->msg_tx_[25], this->msg_tx_[26], this->msg_tx_[27], this->msg_tx_[28], this->msg_tx_[29]);
   return transmit();
 }
 
